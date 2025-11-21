@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin – Purchases Overview</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 16px; background:#f9fafb; }
+    h1 { font-size: 1.2rem; margin-bottom: 4px; }
+    small { color: #555; }
+
+    .panel {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 10px 12px;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.03);
+    }
+
+    #charts-row {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      align-items: flex-start;
+    }
+
+    #water-chart{
+      flex: 1;
+      min-width: 0;
+    }
+
+    #ratio-chart{
+      flex: 1;
+      min-width: 200px;
+    }
+
+    #water-chart h2, #ratio-chart h2 {
+      margin: 0 0 6px;
+      font-size: 0.95rem;
+    }
+
+    #water-chart p, #ratio-chart p {
+      margin: 0 0 8px;
+      font-size: 0.75rem;
+      color: #6b7280;
+    }
+
+    .water-bar-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 4px;
+      font-size: 0.8rem;
+      gap: 6px;
+    }
+
+    .water-bar-label {
+      width: 120px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .water-bar-track {
+      flex: 1;
+      height: 10px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      overflow: hidden;
+    }
+
+    .water-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: #60a5fa;
+    }
+
+    .water-bar-value {
+      font-size: 0.75rem;
+      color: #4b5563;
+      white-space: nowrap;
+    }
+
+    /* Ratio chart */
+    .ratio-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.8rem;
+    }
+
+    .ratio-bar-row {
+      display: grid;
+      grid-template-columns: 170px 1fr 80px; /* label | bar | value */
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ratio-label {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ratio-track {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      overflow: hidden;
+    }
+
+    .ratio-fill-eu {
+      height: 100%;
+      border-radius: 999px;
+      background: #34d399;
+    }
+
+    .ratio-fill-factory {
+      height: 100%;
+      border-radius: 999px;
+      background: #f97316;
+    }
+
+    .ratio-value {
+      font-size: 0.75rem;
+      color: #4b5563;
+      white-space: nowrap;
+    }
+
+    /* Summary + table + per-product list */
+    #summary { margin-top: 16px; font-size: 0.85rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; background:#ffffff; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 8px; font-size: 0.85rem; vertical-align: top; }
+    th { background: #f3f4f6; text-align: left; }
+
+    #per-product {
+      margin-top: 16px;
+      font-size: 0.8rem;
+    }
+    #per-product h2 {
+      font-size: 0.95rem;
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Admin – Purchases</h1>
+  <small>Automatically refreshes every 3 seconds</small>
+
+  <!-- TOP ROW: charts -->
+  <div id="charts-row">
+    <div id="water-chart" class="panel">
+      <h2>Water use by item (L)</h2>
+      <p>Each bar shows total water used for all purchased units of that item.</p>
+      <div id="water-chart-body">
+        <p style="font-size:0.8rem;color:#6b7280;margin:0;">No purchases yet.</p>
+      </div>
+    </div>
+
+    <div id="ratio-chart" class="panel">
+      <h2>Total water vs days of water</h2>
+      <p>Comparison of total water used vs daily water allowances.</p>
+      <div id="ratio-chart-body">
+        <p style="font-size:0.8rem;color:#6b7280;margin:0;">No purchases yet.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- BELOW: summary + detailed tables -->
+  <div id="summary"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Items</th>
+        <th>Total €</th>
+        <th>CO₂ (kg)</th>
+        <th>Water (L)</th>
+      </tr>
+    </thead>
+    <tbody id="table-body"></tbody>
+  </table>
+
+  <div id="per-product"></div>
+
+  <script>
+    // 🔧 Set this to your laptop IP if used over Wi-Fi, e.g. "http://192.168.1.42:4000"
+    const API_BASE = "http://145.94.191.229:4000";
+
+    // Benchmarks for daily water use
+    const EU_DAILY_L = 130;      // L/day per person
+    const FACTORY_DAILY_L = 60;  // L/day per person (factory-region benchmark)
+
+    async function loadData() {
+      try {
+        const [purchasesRes, statsRes] = await Promise.all([
+          fetch(API_BASE + "/api/purchases"),
+          fetch(API_BASE + "/api/stats"),
+        ]);
+
+        const purchases = await purchasesRes.json();
+        const stats = await statsRes.json();
+
+        renderWaterChart(stats.perProduct || {});
+        renderRatioChart(stats);
+        renderSummary(stats);
+        renderTable(purchases);
+        renderPerProduct(stats.perProduct || {});
+      } catch (err) {
+        console.error("Failed to load admin data", err);
+      }
+    }
+
+    function renderWaterChart(perProduct) {
+      const container = document.getElementById("water-chart-body");
+      container.innerHTML = "";
+
+      const names = Object.keys(perProduct);
+      if (names.length === 0) {
+        container.innerHTML =
+          '<p style="font-size:0.8rem;color:#6b7280;margin:0;">No purchases yet.</p>';
+        return;
+      }
+
+      // Find max water to scale bar widths
+      let maxWater = 0;
+      names.forEach((name) => {
+        const w = perProduct[name].totalWater || 0;
+        if (w > maxWater) maxWater = w;
+      });
+      if (maxWater <= 0) maxWater = 1;
+
+      names.forEach((name) => {
+        const stats = perProduct[name];
+        const totalWater = stats.totalWater || 0;
+        const widthPercent = Math.max(5, (totalWater / maxWater) * 100); // min 5% so tiny bars still visible
+
+        const row = document.createElement("div");
+        row.className = "water-bar-row";
+
+        const label = document.createElement("span");
+        label.className = "water-bar-label";
+        label.textContent = name;
+
+        const track = document.createElement("div");
+        track.className = "water-bar-track";
+
+        const fill = document.createElement("div");
+        fill.className = "water-bar-fill";
+        fill.style.width = widthPercent + "%";
+
+        const value = document.createElement("span");
+        value.className = "water-bar-value";
+        value.textContent = totalWater.toLocaleString() + " L";
+
+        track.appendChild(fill);
+        row.appendChild(label);
+        row.appendChild(track);
+        row.appendChild(value);
+
+        container.appendChild(row);
+      });
+    }
+
+    function renderRatioChart(stats) {
+      const container = document.getElementById("ratio-chart-body");
+      container.innerHTML = "";
+
+      const totalWater = stats.totalWater || 0;
+      if (totalWater <= 0) {
+        container.innerHTML =
+          '<p style="font-size:0.8rem;color:#6b7280;margin:0;">No purchases yet.</p>';
+        return;
+      }
+
+      const euDays = totalWater / EU_DAILY_L;
+      const factoryDays = totalWater / FACTORY_DAILY_L;
+      const maxDays = Math.max(euDays, factoryDays, 1);
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "ratio-row";
+
+      // EU bar
+      const euRow = document.createElement("div");
+      euRow.className = "ratio-bar-row";
+
+      const euLabel = document.createElement("span");
+      euLabel.className = "ratio-label";
+      euLabel.textContent = "EU daily water (130 L/d)";
+
+      const euTrack = document.createElement("div");
+      euTrack.className = "ratio-track";
+
+      const euFill = document.createElement("div");
+      euFill.className = "ratio-fill-eu";
+      euFill.style.width = (euDays / maxDays) * 100 + "%";
+
+      const euValue = document.createElement("span");
+      euValue.className = "ratio-value";
+      euValue.textContent = euDays.toFixed(1) + " days";
+
+      euTrack.appendChild(euFill);
+      euRow.appendChild(euLabel);
+      euRow.appendChild(euTrack);
+      euRow.appendChild(euValue);
+
+      // Factory bar
+      const factoryRow = document.createElement("div");
+      factoryRow.className = "ratio-bar-row";
+
+      const factoryLabel = document.createElement("span");
+      factoryLabel.className = "ratio-label";
+      factoryLabel.textContent = "Factory-region water (60 L/d)";
+
+      const factoryTrack = document.createElement("div");
+      factoryTrack.className = "ratio-track";
+
+      const factoryFill = document.createElement("div");
+      factoryFill.className = "ratio-fill-factory";
+      factoryFill.style.width = (factoryDays / maxDays) * 100 + "%";
+
+      const factoryValue = document.createElement("span");
+      factoryValue.className = "ratio-value";
+      factoryValue.textContent = factoryDays.toFixed(1) + " days";
+
+      factoryTrack.appendChild(factoryFill);
+      factoryRow.appendChild(factoryLabel);
+      factoryRow.appendChild(factoryTrack);
+      factoryRow.appendChild(factoryValue);
+
+      // Total text
+      const text = document.createElement("p");
+      text.style.fontSize = "0.75rem";
+      text.style.color = "#6b7280";
+      text.style.marginTop = "6px";
+      text.style.display = "block";
+      text.innerHTML =
+        "Total water used: <strong>" +
+        totalWater.toLocaleString() +
+        " L</strong><br>" +
+        "Equivalent to <strong>" +
+        euDays.toFixed(1) +
+        " EU person-days</strong> of water, or <strong>" +
+        factoryDays.toFixed(1) +
+        " factory-region person-days</strong>.";
+
+      wrapper.appendChild(euRow);
+      wrapper.appendChild(factoryRow);
+      wrapper.appendChild(text);
+
+      container.appendChild(wrapper);
+    }
+
+    function renderSummary(stats) {
+      const div = document.getElementById("summary");
+      div.innerHTML = `
+        <div class="panel" style="margin-top:12px;">
+          <p style="margin:0;font-size:0.85rem;">
+            <strong>Total simulated purchases:</strong> ${stats.totalPurchases}<br>
+            <strong>Total spent:</strong> €${stats.totalPrice.toFixed(2)}<br>
+            <strong>Total CO₂:</strong> ${stats.totalCo2.toFixed(1)} kg<br>
+            <strong>Total water:</strong> ${stats.totalWater.toLocaleString()} L
+          </p>
+        </div>
+      `;
+    }
+
+    function renderTable(purchases) {
+      const tbody = document.getElementById("table-body");
+      tbody.innerHTML = "";
+
+      purchases.forEach((p) => {
+        const tr = document.createElement("tr");
+
+        const time = new Date(p.createdAt).toLocaleTimeString();
+        const itemsText = (p.items || [])
+          .map((i) => `${i.qty} × ${i.name}`)
+          .join("<br>");
+
+        tr.innerHTML = `
+          <td>${time}</td>
+          <td>${itemsText}</td>
+          <td>€${p.totalPrice.toFixed(2)}</td>
+          <td>${p.totalCo2.toFixed(1)}</td>
+          <td>${p.totalWater.toLocaleString()}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderPerProduct(perProduct) {
+      const div = document.getElementById("per-product");
+      const keys = Object.keys(perProduct);
+      if (keys.length === 0) {
+        div.innerHTML = "";
+        return;
+      }
+
+      let html = "<h2>Per-product totals</h2><ul>";
+      keys.forEach((name) => {
+        const s = perProduct[name];
+        html += `
+          <li>
+            <strong>${name}</strong> – ${s.qty} pcs,
+            €${s.totalPrice.toFixed(2)},
+            ${s.totalCo2.toFixed(1)} kg CO₂,
+            ${s.totalWater.toLocaleString()} L water
+          </li>
+        `;
+      });
+      html += "</ul>";
+      div.innerHTML = html;
+    }
+
+    loadData();
+    setInterval(loadData, 3000);
+  </script>
+</body>
+</html>
